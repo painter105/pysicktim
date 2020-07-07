@@ -1,9 +1,18 @@
-import usb.core
-import usb.util
+# import usb.core
+# import usb.util
+import socket
 import time
 import unicodedata
 import struct
 import ctypes
+import logging
+from easydict import EasyDict as edict
+
+log = logging.getLogger(__name__)
+
+
+BUFFER_SIZE = 65535 # From original PySICKTiM
+
 
 ################################################################
 #   ERRORS
@@ -13,6 +22,15 @@ class InvalidData(Exception):
 
 class LidarNotFound(Exception):
     pass
+
+class LidarException(Exception):
+    """"Exception thrown by the device with specific error code and description"""
+
+    def __init__(self,error_code,description):
+        self.error_code = error_code
+        self.description = description
+
+        super().__init__(f"{error_code} : {description}")
 
 error_codes=[
     "Sopas_Ok",
@@ -97,9 +115,10 @@ def uint32(i):
 
 def check_error(s):
     if s[0:3] == "sFA":
-        error_code = error_codes[int(s[1],16)]
+        error_code = error_codes[int(s[-1],16)]
         error_description = error_descriptions[error_code]
-        return [error_code,error_description]
+        raise LidarException(error_code,error_description)
+        # return [error_code,error_description]
     else:
         return s
 
@@ -115,63 +134,148 @@ def parse_str(d):
 
 class LiDAR:
 
-    def connect(self, idVendor=0x19a2, idProduct=0x5001):
+    tcp_ip = None
+    tcp_port = None
+    lidar = None
+    connected = False
+    socket_timeout = None
 
-        lidar = usb.core.find(idVendor, idProduct)
+    def __init__(self,tcp_ip='169.254.219.5',tcp_port=2111,name=None,user=None,password=None,socket_timeout=None):
+        self.tcp_ip = tcp_ip
+        self.tcp_port = tcp_port
+        self.socket_timeout = socket_timeout
 
-        if lidar is None:
+        self.open()
+        if user is not None and password is not None:
+            self.setaccessmode(user=user,password=password)
+        elif user is None and password is None:
+            pass
+        elif user is None or password is None:
+            raise Exception("Both user and password need to be provided.")
 
-            raise LidarNotFound("LiDAR Device is not connected!")
-            return 1
 
-        else:
+        if name is not None:
+            if user is None or password is None:
+                log.info("""
+                Device name given but no access level credentials are provided.
+                Defaulting to Authorized client credentials""")
+                self.setaccessmode()
 
-            return 0
+            self.setLocationName(name)
+
+        log.debug("Succesfully ceated LiDAR object")
+        log.debug(self.info())
+
+        self.close()
+
+
+
+    def info(self):
+        """
+        Returns information over the device
+        :return: string
+        """
+        device_loc_name = self.readLocationName()
+        device_ident = self.deviceident()
+        device_type = self.devicetype()
+        device_state = self.devicestate()
+
+        return f"""
+        Device Location Name = {device_loc_name}
+        Device Type = {device_type}
+        Device Identification Info: = {device_ident}
+        Device State = {device_state}
+        """
+
+    def open(self):
+        """
+        Opens socket connection with the lidar.
+        Remember to close the connection when the lidar is not needed anymore.
+        :return: void
+        """
+        if not self.connected:
+            self.lidar = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            if self.socket_timeout is not None:
+                self.lidar.settimeout(self.socket_timeout)
+
+            self.lidar.connect((self.tcp_ip, self.tcp_port))
+            self.connected = True
+
+    def close(self):
+        """
+        Closes socket connection.
+        :return: void
+        """
+        if self.connected:
+            self.lidar.close()
+            self.connected = False
+
 
     def read(self):
-
-        if connected() == 0:
-
-            arr = lidar.read(1|usb.ENDPOINT_IN,65535,timeout=100)
-            arr = "".join([chr(x) for x in arr[1:-1]])
-            arr = check_error(arr)
-            return arr
+        """
+        Reads response from lidar and returns parsed string checked for errors
+        :return: string
+        """
+        if self.connected:
+            msg = self.lidar.recv(BUFFER_SIZE)
+            assert msg[:1] == b"\x02" and msg[-1:] == b"\x03", "improper open and close bytes in message"
+            msg = check_error(msg)
+            return msg[1:-1].decode("utf-8")
 
         else:
-
             raise LidarNotFound("LiDAR Device is not connected!")
-            return 1
 
-    def send(self, cmd):
 
-        if connected() == 0:
+    def send(self, cmd : str):
+        """
+        Sends a command directly to the lidar.
 
-            lidar.write(2|usb.ENDPOINT_OUT,"\x02"+cmd+"\x03\0",0)
+        See https://cdn.sick.com/media/docs/7/27/927/Technical_information_Telegram_Listing_Ranging_sensors_LMS1xx_LMS5xx_TiM5xx_TiM7xx_LMS1000_MRS1000_MRS6000_NAV310_LD_OEM15xx_LD_LRS36xx_LMS4000_en_IM0045927.PDF
+            for commmands
+        Opening and closing bytes are added automatically.
+        :param cmd: string command without opening and closing bytes
+        :return: success boolean
+        """
+        cmd = bytes(cmd,"utf-8")
 
+        if self.connected:
+            self.lidar.send(b"\x02"+cmd+b"\x03\0")
+            return True
         else:
+            log.error("LIDAR Device not found! Did you open the socket connection?")
+            return self.connected
 
-            print("LIDAR Device not found!")
-            return connected()
-
-    ######################
+    #####################################################################
+    #   Wrappers telegram functions as described in the telegram listing document. See this document for documentation.
+    #   The functions can also be called directly using send()
 
     def firmwarev(self):
-        send('sRN FirmwareVersion')
-        answer = read()
+        self.send('sRN FirmwareVersion')
+        answer = self.read()
         answer = answer.split()
         answer = answer[-1]
         return answer
 
     def deviceident(self):
-        send('sRI0')
-        answer = read()
+        self.send('sRI0')
+        answer = self.read()
         answer = answer.split()
         answer = answer[3] + ' ' + answer[4] + ' ' + answer[5]
         return answer
 
     def setaccessmode(self, user="03",password="F4724744"):
-        send('sMN SetAccessMode '+user+" "+password)
-        answer = read()
+        # Userlevels:
+        #   Maintenance: 02
+        #   Authorized client: 03
+        #   Service: 04
+        # Passwords:
+        #   Maintenance: B21ACE26
+        #   Authorized client: F4724744
+        #   Service: 81BE23AA
+
+        self.send('sMN SetAccessMode '+user+" "+password)
+        answer = self.read()
         if answer == "sAN SetAccessMode 1":
             return 0
         else:
@@ -180,8 +284,8 @@ class LiDAR:
     def scancfg(self):   # Read for frequency and angular resolution
         # Request Read Command
         # sRN LMPscancfg
-        send('sRN LMPscancfg')
-        answer = read()
+        self.send('sRN LMPscancfg')
+        answer = self.read()
         answer = answer.split()
 
         if len(answer) == 7:
@@ -197,8 +301,8 @@ class LiDAR:
 
     def startmeas(self):   # Start measurement
         # sMN LMCstartmeas
-        send('sMN LMCstartmeas')
-        answer = read()
+        self.send('sMN LMCstartmeas')
+        answer = self.read()
         if answer == "sAN LMCstartmeas 0":
             return 0
         else:
@@ -207,8 +311,8 @@ class LiDAR:
 
     def stopmeas(self):   # Stop measurement
         # sMN LMCstopmeas
-        send('sMN LMCstopmeas')
-        answer = read()
+        self.send('sMN LMCstopmeas')
+        answer = self.read()
         if answer == "sAN LMCstopmeas 0":
             return 0
         else:
@@ -217,8 +321,8 @@ class LiDAR:
 
     def loadfacdef(self):   # Load factory defaults
         # sMN mSCloadfacdef
-        send('sMN mSCloadfacdef')
-        answer = read()
+        self.send('sMN mSCloadfacdef')
+        answer = self.read()
         if answer == "sAN mSCloadfacdef":
             return 0
         else:
@@ -226,21 +330,21 @@ class LiDAR:
 
     def loadappdef(self):    # Load application defaults
         # sMN mSCloadappdef
-        send('sMN mSCloadappdef')
-        answer = read()
+        self.send('sMN mSCloadappdef')
+        answer = self.read()
         return answer
 
     def checkpassword(self,user,password):    # Check password
         # sMN CheckPassword 03 19 20 E4 C9
-        send('sMN CheckPassword '+user+' '+password)
-        answer = read()
+        self.send('sMN CheckPassword '+user+' '+password)
+        answer = self.read()
         return answer
         # sAN CheckPassword  1
 
     def reboot(self):    # Reboot device
         # sMN mSCreboot
-        send('sMN mSCreboot')#
-        answer = read()
+        self.send('sMN mSCreboot')#
+        answer = self.read()
         if answer == "sAN mSCreboot":
             return 0
         else:
@@ -249,15 +353,15 @@ class LiDAR:
 
     def writeall(self):    # Save parameters permanently
         # sMN mEEwriteall
-        send('sMN mEEwriteall')
-        answer = read()
+        self.send('sMN mEEwriteall')
+        answer = self.read()
         return answer
         # sAN mEEwriteall 1
 
     def run(self):    # Set to run
         # sMN Run
-        send('sMN Run')
-        answer = read()
+        self.send('sMN Run')
+        answer = self.read()
         if answer == "sAN Run 1":
             return 0
         else:
@@ -269,142 +373,146 @@ class LiDAR:
     #   Measurement output telegram
 
 
-    # DOES NOT WORK YET
-    def scandatacfg(self, channel='01 00', rem_ang=1, res=1, unit=0, enc='00 00', pos=0, name=0, comment=0, time=0, out_rate='+1'):    # Configure the data content for the scan
-        # sWN LMDscandatacfg 01 00 1 1 0 00 00 0 0 0 0 +1
-        # sWN LMDscandatacfg 01 00 1 1 0 00 00 0  0 0 +10
-        # sWN LMDscandatacfg 02 0 0 1 0 01 0 0 0 0 0 +10
-        send('sWN LMDscandatacfg '+str(channel)+' '+str(rem_ang)+' '+str(res)+' '+str(unit)+' '+str(enc)+' '+str(pos)+' '+str(name)+' '+str(comment)+' '+str(time)+' '+str(out_rate))
-        answer = read()
-        if answer == "sWA LMDscandatacfg":
-            return 0
-        else:
-            return answer
-
-        # sWA LMDscandatacfg
+    # # DOES NOT WORK YET
+    # def scandatacfg(self, channel='01 00', rem_ang=1, res=1, unit=0, enc='00 00', pos=0, name=0, comment=0, time=0, out_rate='+1'):    # Configure the data content for the scan
+    #     # sWN LMDscandatacfg 01 00 1 1 0 00 00 0 0 0 0 +1
+    #     # sWN LMDscandatacfg 01 00 1 1 0 00 00 0  0 0 +10
+    #     # sWN LMDscandatacfg 02 0 0 1 0 01 0 0 0 0 0 +10
+    #     self.send('sWN LMDscandatacfg '+str(channel)+' '+str(rem_ang)+' '+str(res)+' '+str(unit)+' '+str(enc)+' '+str(pos)+' '+str(name)+' '+str(comment)+' '+str(time)+' '+str(out_rate))
+    #     answer = self.read()
+    #     if answer == "sWA LMDscandatacfg":
+    #         return 0
+    #     else:
+    #         return answer
+    #
+    #     # sWA LMDscandatacfg
 
     def outputRange(self):    # Configure measurement angle of the scandata for output
         # sWN LMPoutputRange 1 1388 0 DBBA0
-        send('sWN LMPoutputRange')
-        answer = read()
+        self.send('sWN LMPoutputRange')
+        answer = self.read()
         return answer
         # sWA LMPoutputRange
 
     def outputRange(self):    # Read for actual output range
         # sRN LMPoutputRange
-        send('sRN LMPoutputRange')
-        answer = read()
+        self.send('sRN LMPoutputRange')
+        answer = self.read()
         return answer
         # sRA LMPoutputRange 1 1388 FFF92230 225510
 
-    def scan(self, raw=False):    # Get LIDAR Data
 
-        send('sRN LMDscandata')
-        raw_data = read()
+
+    def scan(self, raw=False):    # Get LIDAR Data
+        self.send('sRN LMDscandata')
+        raw_data = self.read()
         data = raw_data
 
-        if raw == False:
+        scan = edict()
 
-            self.scan.dist_start = None
-            self.scan.rssi_start = None
+        if not raw:
 
-            print(data)
+            scan.dist_start = None
+            scan.rssi_start = None
+
+            log.debug(f"Scanresponse: {raw_data}")
 
             data = data.split()
 
             for index, item in enumerate(data):
-                if "DIST" in item and self.scan.dist_start == None:
-                    self.scan.dist_start = index
+                if "DIST" in item and scan.dist_start == None:
+                    scan.dist_start = index
 
                 if "RSSI" in item:
-                    self.scan.rssi_start = index
+                    scan.rssi_start = index
 
-            self.scan.telegram_len = len(data)
-            self.scan.cmd_type =         data[0]
-            self.scan.cmd =              data[1]
-            self.scan.version =      int(data[2],16)
-            self.scan.device_num =   int(data[3],16)
-            self.scan.serial_num =   int(data[4],16)
-            self.scan.device_stat =  int(data[6],8)
-            self.scan.telegram_cnt = int(data[7],16)
-            self.scan.scan_cnt =     int(data[8],16)
-            self.scan.uptime =       int(data[9],32)
-            self.scan.trans_time =   int(data[10],32)
-            # self.scan.input_stat =   int(str(data[11],data[12]),32)    # Takes both bytes into account
-            self.scan.input_stat =   int(data[12],32)
-            # self.scan.output_stat =  int(str(data[13],data[14]),8)     # Takes both bytes into account
-            self.scan.output_stat =  int(data[14],8)
-            self.scan.layer_ang =    int(data[15],16)
-            self.scan.scan_freq =    int(data[16],32)/100
-            self.scan.meas_freq =    int(data[17],16)/100   # Math may not be right
-            self.scan.enc_amount =   int(data[18],16)
+            scan.telegram_len = len(data)
+            scan.cmd_type = data[0]
+            scan.cmd = data[1]
+            scan.version = int(data[2], 16)
+            scan.device_num = int(data[3], 16)
+            scan.serial_num = int(data[4], 16)
+            scan.device_stat = int(data[6], 8)
+            scan.telegram_cnt = int(data[7], 16)
+            scan.scan_cnt = int(data[8], 16)
+            scan.uptime = int(data[9], 32)
+            scan.trans_time = int(data[10], 32)
+            # scan.input_stat =   int(str(data[11],data[12]),32)    # Takes both bytes into account
+            scan.input_stat = int(data[12], 32)
+            # scan.output_stat =  int(str(data[13],data[14]),8)     # Takes both bytes into account
+            scan.output_stat = int(data[14], 8)
+            scan.layer_ang = int(data[15], 16)
+            scan.scan_freq = int(data[16], 32) / 100
+            scan.meas_freq = int(data[17], 16) / 100  # Math may not be right
+            scan.enc_amount = int(data[18], 16)
 
-            self.scan.num_16bit_chan = int(data[19],16)
+            scan.num_16bit_chan = int(data[19], 16)
 
-            if self.scan.dist_start != None:
+            if scan.dist_start != None:
 
-                self.scan.dist_label = data[20]
-                self.scan.dist_scale_fact = int(data[self.scan.dist_start+1],16)
-                self.scan.dist_scale_fact_offset = int(data[self.scan.dist_start+2],16)
-                self.scan.dist_start_ang = uint32(data[self.scan.dist_start+3])/10000
-                self.scan.dist_angle_res = int(data[self.scan.dist_start+4],16)/10000
-                self.scan.dist_data_amnt = int(data[self.scan.dist_start+5],16)
-                self.scan.dist_end = (self.scan.dist_start+6) + self.scan.dist_data_amnt
-                self.scan.distances = hex_to_meters(data[self.scan.dist_start+6:self.scan.dist_end])
-                self.scan.raw_distances = " ".join(data[self.scan.dist_start+6:self.scan.dist_end])
-
-            else:
-
-                self.scan.dist_label = None
-                self.scan.dist_scale_fact = None
-                self.scan.dist_scale_fact_offset = None
-                self.scan.dist_start_ang = None
-                self.scan.dist_angle_res = None
-                self.scan.dist_data_amnt = None
-                self.scan.dist_end = None
-                self.scan.distances = None
-                self.scan.raw_distances = None
-
-            if self.scan.rssi_start != None:
-
-                self.scan.rssi_label = data[20]
-                self.scan.rssi_scale_fact = int(data[self.scan.rssi_start+1],16)
-                self.scan.rssi_scale_fact_offset = int(data[self.scan.rssi_start+2],16)
-                self.scan.rssi_start_ang = uint32(data[self.scan.rssi_start+3])/10000
-                self.scan.rssi_angle_res = int(data[self.scan.rssi_start+4],16)/10000
-                self.scan.rssi_data_amnt = int(data[self.scan.rssi_start+5],16)
-                self.scan.rssi_end = (self.scan.rssi_start+6) + self.scan.rssi_data_amnt
-                self.scan.rssi = data[self.scan.rssi_start+6:self.scan.rssi_end]
+                scan.dist_label = data[20]
+                scan.dist_scale_fact = int(data[scan.dist_start + 1], 16)
+                scan.dist_scale_fact_offset = int(data[scan.dist_start + 2], 16)
+                # scan.dist_start_ang = int(data[scan.dist_start + 3], 32) / 10000
+                scan.dist_start_ang = (int(data[scan.dist_start + 3],16) - (1 << 32)) / 10000 # 32 bit unsigned int represented as hex
+                scan.dist_angle_res = int(data[scan.dist_start + 4], 16) / 10000
+                scan.dist_data_amnt = int(data[scan.dist_start + 5], 16)
+                scan.dist_end = (scan.dist_start + 6) + scan.dist_data_amnt
+                scan.distances = hex_to_meters(data[scan.dist_start + 6:scan.dist_end])
+                scan.raw_distances = " ".join(data[scan.dist_start + 6:scan.dist_end])
 
             else:
 
-                self.scan.rssi_label = None
-                self.scan.rssi_scale_fact = None
-                self.scan.rssi_scale_fact_offset = None
-                self.scan.rssi_start_ang = None
-                self.scan.rssi_angle_res = None
-                self.scan.rssi_data_amnt = None
-                self.scan.rssi_end = None
-                self.scan.rssi = None
+                scan.dist_label = None
+                scan.dist_scale_fact = None
+                scan.dist_scale_fact_offset = None
+                scan.dist_start_ang = None
+                scan.dist_angle_res = None
+                scan.dist_data_amnt = None
+                scan.dist_end = None
+                scan.distances = None
+                scan.raw_distances = None
 
+            if scan.rssi_start != None:
+
+                scan.rssi_label = data[20]
+                scan.rssi_scale_fact = int(data[scan.rssi_start + 1], 16)
+                scan.rssi_scale_fact_offset = int(data[scan.rssi_start + 2], 16)
+                scan.rssi_start_ang = (int(data[scan.dist_start + 3],16) - (1 << 32)) / 10000 # 32 bit unsigned int represented as hex
+                scan.rssi_angle_res = int(data[scan.rssi_start + 4], 16) / 10000
+                scan.rssi_data_amnt = int(data[scan.rssi_start + 5], 16)
+                scan.rssi_end = (scan.rssi_start + 6) + scan.rssi_data_amnt
+                scan.rssi = data[scan.rssi_start + 6:scan.rssi_end]
+
+            else:
+
+                scan.rssi_label = None
+                scan.rssi_scale_fact = None
+                scan.rssi_scale_fact_offset = None
+                scan.rssi_start_ang = None
+                scan.rssi_angle_res = None
+                scan.rssi_data_amnt = None
+                scan.rssi_end = None
+                scan.rssi = None
+
+            return scan
+        else:
             return raw_data
-
-    # LMDscandata - reserved values PAGE 80
 
     #####################################################################
     #   Filter
 
     def particle(self):    # Set particle filter
         # sWN LFPparticle 1 +500
-        send('sWN LFPparticle')
-        answer = read()
+        self.send('sWN LFPparticle')
+        answer = self.read()
         return answer
         # sWA LFPparticle
 
     def meanfilter(self, status_code=0,number_of_scans="+10"):    # Set mean filter
         # sWN LFPmeanfilter 1 +10 0
-        send('sWN LFPmeanfilter '+status_code+' '+number_of_scans+' 0')
-        answer = read()
+        self.send('sWN LFPmeanfilter '+status_code+' '+number_of_scans+' 0')
+        answer = self.read()
         return answer
         # sWA LFPmeanfilter
 
@@ -416,17 +524,19 @@ class LiDAR:
 
     def outputstate(self):    # Read state of the outputs
         # sRN LIDoutputstate
-        send('sRN LIDoutputstate')
+        self.send('sRN LIDoutputstate')
+        answer = self.read()
+        return answer
 
     def eventoutputstate(self, state):    # Send outputstate by event
-        send('sEN LIDoutputstate '+str(state))
-        answer = read()
+        self.send('sEN LIDoutputstate '+str(state))
+        answer = self.read()
         return answer
 
     def setoutput(self):    # Set output state
         # sMN mDOSetOutput 1 1
-        send('sMN mDOSetOutput')
-        answer = read()
+        self.send('sMN mDOSetOutput')
+        answer = self.read()
         return answer
         # sAN mDOSetOutput 1
     #####################################################################
@@ -434,15 +544,15 @@ class LiDAR:
 
     def debtim(self):    # Set debouncing time for input x
         # sWN DI3DebTim +10
-        send('sWN DI3DebTim')
-        answer = read()
+        self.send('sWN DI3DebTim')
+        answer = self.read()
         return answer
         # sWA DI3DebTim
 
     def deviceident(self):    # Read device ident
         # sRN DeviceIdent
-        send('sRN DeviceIdent')
-        answer = read()
+        self.send('sRN DeviceIdent')
+        answer = self.read()
         answer = answer.split()
         answer = answer[3] + ' ' + answer[4] + ' ' + answer[5]
         return answer
@@ -450,36 +560,43 @@ class LiDAR:
 
     def devicestate(self):    # Read device state
         # sRN SCdevicestate
-        send('sRN SCdevicestate')
-        answer = read()
-        return answer
+        self.send('sRN SCdevicestate')
+        answer = self.read()
+
+        states = {
+            0 : "Busy",
+            1 : "Ready",
+            2 : "Error",
+            3 : "Standby"
+        }
+        return states[int(answer[-1])]
         # sRA SCdevicestate 0
 
     def ornr(self):    # Read device information
         # sRN DIornr
-        send('sRN DIornr')
-        answer = read()
+        self.send('sRN DIornr')
+        answer = self.read()
         return answer
         # sRA DIornr 1071419
 
     def devicetype(self):    # Device type
         # sRN DItype
-        send('sRN DItype')
-        answer = read()
+        self.send('sRN DItype')
+        answer = self.read()
         return answer
         # sRA DItype E TIM561-2050101
 
     def oprh(self):    # Read operating hours
         # sRN ODoprh
-        send('sRN ODoprh')
-        answer = read()
+        self.send('sRN ODoprh')
+        answer = self.read()
         return answer
         # sRA ODoprh 2DC8B
 
     def pwrc(self):    # Read power on counter
         # sRN ODpwrc
-        send('sRN ODpwrc')
-        answer = read()
+        self.send('sRN ODpwrc')
+        answer = self.read()
         return answer
         # sRA ODpwrc 752D
 
@@ -487,23 +604,23 @@ class LiDAR:
         # sWN LocationName +13 OutdoorDevice
         name = " " + name
         string = 'sWN LocationName +'+str(len(name)-1)+name
-        send(string)
-        answer = read()
+        self.send(string)
+        answer = self.read()
         return answer
         # sWA LocationName
 
     def readLocationName(self):    # Read for device name
         # sRN LocationName
-        send('sRN LocationName')
-        answer = read()
+        self.send('sRN LocationName')
+        answer = self.read()
         answer = parse_str(answer)
         return answer
         # sRA LocationName D OutdoorDevice
 
     def rstoutpcnt(self):    # Reset output counter
         # sMN LIDrstoutpcnt
-        send('sMN LIDrstoutpcnt')
-        answer = read()
+        self.send('sMN LIDrstoutpcnt')
+        answer = self.read()
     #    answer = parse_str(answer)
         return answer
         # sAN LIDrstoutpcnt 0

@@ -8,15 +8,15 @@ with open(path.join(this_directory, 'README.md')) as f:
 
 setuptools.setup(
     name='pysicktim',
-    version='0.1.0',
-    description='TIM561 Python Library',
+    version='0.2.0',
+    description='TIM5xx Python Library, TCP version',
     license='GNU General Public License v3.0',
     packages=setuptools.find_packages(),
-    install_requires=['pyusb'],
-    author='Daniyal Ansari',
-    author_email='daniyal.s.ansari+pypi@gmail.com',
-    keywords=['tim561','sick','lidar','sicktim','tim5xx','sicktim5xx','sicktim561'],
-    url='https://github.com/ansarid/pysicktim',
+    install_requires=[],
+    author='Dennis van Peer',
+    author_email='den.vanpeer+pypi@gmail.com',
+    keywords=['tim561','tcp','sick','lidar','sicktim','tim5xx','sicktim5xx','sicktim561'],
+    url='todo',
     long_description=long_description,
     long_description_content_type='text/markdown'
 )

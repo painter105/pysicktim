@@ -16,7 +16,7 @@ setuptools.setup(
     author='Dennis van Peer',
     author_email='den.vanpeer+pypi@gmail.com',
     keywords=['tim561','tcp','sick','lidar','sicktim','tim5xx','sicktim5xx','sicktim561'],
-    url='todo',
+    url='https://github.com/Denpeer/pysicktim',
     long_description=long_description,
     long_description_content_type='text/markdown'
 )

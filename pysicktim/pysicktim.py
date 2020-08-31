@@ -257,13 +257,6 @@ class LiDAR:
         answer = answer[-1]
         return answer
 
-    def deviceident(self):
-        self.send('sRI0')
-        answer = self.read()
-        answer = answer.split()
-        answer = answer[3] + ' ' + answer[4] + ' ' + answer[5]
-        return answer
-
     def setaccessmode(self, user="03",password="F4724744"):
         # Userlevels:
         #   Maintenance: 02
@@ -387,12 +380,12 @@ class LiDAR:
     #
     #     # sWA LMDscandatacfg
 
-    def outputRange(self):    # Configure measurement angle of the scandata for output
-        # sWN LMPoutputRange 1 1388 0 DBBA0
-        self.send('sWN LMPoutputRange')
-        answer = self.read()
-        return answer
-        # sWA LMPoutputRange
+    # def outputRange(self):    # Configure measurement angle of the scandata for output
+    #     # sWN LMPoutputRange 1 1388 0 DBBA0
+    #     self.send('sWN LMPoutputRange')
+    #     answer = self.read()
+    #     return answer
+    #     # sWA LMPoutputRange
 
     def outputRange(self):    # Read for actual output range
         # sRN LMPoutputRange

@@ -220,8 +220,8 @@ class LiDAR:
         if self.connected:
             msg = self.lidar.recv(BUFFER_SIZE)
             assert msg[:1] == b"\x02" and msg[-1:] == b"\x03", "improper open and close bytes in message"
-            msg = check_error(msg)
-            return msg[1:-1].decode("utf-8")
+            msg = check_error(msg[1:-1].decode("utf-8"))
+            return msg
 
         else:
             raise LidarNotFound("LiDAR Device is not connected!")

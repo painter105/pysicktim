@@ -109,9 +109,14 @@ def hex_to_meters(i):
     i = [ int(x,16)/1000 for x in i ]
     return i
 
-def uint32(i):
-    i = struct.unpack('>i', bytes.fromhex(i))[0]
+def int32(i):
+    i = struct.unpack('>i', bytes.fromhex(i.zfill(8)))[0]
     return i
+
+def float32(i):
+    i = struct.unpack('>f', bytes.fromhex(i.zfill(8)))[0]
+    return i
+
 
 def check_error(s):
     if s[0:3] == "sFA":
@@ -282,12 +287,12 @@ class LiDAR:
         answer = answer.split()
 
         if len(answer) == 7:
-            scan_freq = int(answer[2],16)/100
-            sectors = int(answer[3],16)
-            ang_res = int(answer[4],16)/10000   # Manual says uint_32?
-            start_ang = int(answer[5],32)/10000
-            stop_ang = int(answer[6],32)/10000
-            return [scan_freq,sectors,ang_res,start_ang,stop_ang]
+            scan_freq = int(answer[2], 16) / 100
+            sectors = int(answer[3], 16)
+            ang_res = int(answer[4], 16)
+            start_ang = int32(answer[5])
+            stop_ang = int32(answer[6])
+            return [scan_freq, sectors, ang_res, start_ang, stop_ang]
 
         else:
             return answer
@@ -425,17 +430,17 @@ class LiDAR:
             scan.version = int(data[2], 16)
             scan.device_num = int(data[3], 16)
             scan.serial_num = int(data[4], 16)
-            scan.device_stat = int(data[6], 8)
+            scan.device_stat = int(data[6], 16)
             scan.telegram_cnt = int(data[7], 16)
             scan.scan_cnt = int(data[8], 16)
-            scan.uptime = int(data[9], 32)
-            scan.trans_time = int(data[10], 32)
-            # scan.input_stat =   int(str(data[11],data[12]),32)    # Takes both bytes into account
-            scan.input_stat = int(data[12], 32)
-            # scan.output_stat =  int(str(data[13],data[14]),8)     # Takes both bytes into account
-            scan.output_stat = int(data[14], 8)
+            scan.uptime = int(data[9], 16)
+            scan.trans_time = int(data[10], 16)
+            # scan.input_stat =   int(str(data[11],data[12]),16)    # Takes both bytes into account
+            scan.input_stat = int(data[12], 16)
+            # scan.output_stat =  int(str(data[13],data[14]),16)     # Takes both bytes into account
+            scan.output_stat = int(data[14], 16)
             scan.layer_ang = int(data[15], 16)
-            scan.scan_freq = int(data[16], 32) / 100
+            scan.scan_freq = int(data[16], 16) / 100
             scan.meas_freq = int(data[17], 16) / 100  # Math may not be right
             scan.enc_amount = int(data[18], 16)
 
@@ -443,15 +448,14 @@ class LiDAR:
 
             if scan.dist_start != None:
 
-                scan.dist_label = data[20]
-                scan.dist_scale_fact = int(data[scan.dist_start + 1], 16)
-                scan.dist_scale_fact_offset = int(data[scan.dist_start + 2], 16)
-                # scan.dist_start_ang = int(data[scan.dist_start + 3], 32) / 10000
-                scan.dist_start_ang = (int(data[scan.dist_start + 3],16) - (1 << 32)) / 10000 # 32 bit unsigned int represented as hex
-                scan.dist_angle_res = int(data[scan.dist_start + 4], 16) / 10000
-                scan.dist_data_amnt = int(data[scan.dist_start + 5], 16)
+                scan.dist_label = data[scan.dist_start]
+                scan.dist_scale_fact = float32(data[scan.dist_start + 1])  # float
+                scan.dist_scale_fact_offset = float32(data[scan.dist_start + 2])  # float
+                scan.dist_start_ang = int32(data[scan.dist_start + 3])  # Int_32
+                scan.dist_angle_res = int(data[scan.dist_start + 4], 16)  # Uint_16
+                scan.dist_data_amnt = int(data[scan.dist_start + 5], 16)  # Uint_16
                 scan.dist_end = (scan.dist_start + 6) + scan.dist_data_amnt
-                scan.distances = hex_to_meters(data[scan.dist_start + 6:scan.dist_end])
+                scan.distances = hex_to_dec(data[scan.dist_start + 6:scan.dist_end])
                 scan.raw_distances = " ".join(data[scan.dist_start + 6:scan.dist_end])
 
             else:
@@ -471,8 +475,8 @@ class LiDAR:
                 scan.rssi_label = data[20]
                 scan.rssi_scale_fact = int(data[scan.rssi_start + 1], 16)
                 scan.rssi_scale_fact_offset = int(data[scan.rssi_start + 2], 16)
-                scan.rssi_start_ang = (int(data[scan.dist_start + 3],16) - (1 << 32)) / 10000 # 32 bit unsigned int represented as hex
-                scan.rssi_angle_res = int(data[scan.rssi_start + 4], 16) / 10000
+                scan.rssi_start_ang = int32(data[scan.dist_start + 3])  # Int_32
+                scan.rssi_angle_res = int(data[scan.rssi_start + 4], 16)
                 scan.rssi_data_amnt = int(data[scan.rssi_start + 5], 16)
                 scan.rssi_end = (scan.rssi_start + 6) + scan.rssi_data_amnt
                 scan.rssi = data[scan.rssi_start + 6:scan.rssi_end]
@@ -504,7 +508,7 @@ class LiDAR:
 
     def meanfilter(self, status_code=0,number_of_scans="+10"):    # Set mean filter
         # sWN LFPmeanfilter 1 +10 0
-        self.send('sWN LFPmeanfilter '+status_code+' '+number_of_scans+' 0')
+        self.send('sWN LFPmeanfilter '+str(status_code)+' '+number_of_scans+' 0')
         answer = self.read()
         return answer
         # sWA LFPmeanfilter

@@ -394,21 +394,29 @@ class LiDAR:
     #
     #     # sWA LMDscandatacfg
 
-    # def outputRange(self):    # Configure measurement angle of the scandata for output
-    #     # sWN LMPoutputRange 1 1388 0 DBBA0
-    #     self.send('sWN LMPoutputRange')
-    #     answer = self.read()
-    #     return answer
-    #     # sWA LMPoutputRange
-
-    def outputRange(self):    # Read for actual output range
-        # sRN LMPoutputRange
-        self.send('sRN LMPoutputRange')
+    def set_outputRange(self, dist_angle_res, dist_start_ang, dist_stop_ang):  # Configure measurement angle of the scandata for output
+        # sWN LMPoutputRange 1 1388 0 DBBA0
+        self.send(
+                'sWN LMPoutputRange 1 %04X %08X %08X' % (
+                    dist_angle_res & 0xffff,  # Uint_16
+                    dist_start_ang & 0xffffffff,  # Int_32
+                    dist_stop_ang & 0xffffffff  # Int_32
+                )
+        )
         answer = self.read()
         return answer
-        # sRA LMPoutputRange 1 1388 FFF92230 225510
+        # sWA LMPoutputRange
 
-
+    def outputRange(self):  # Read for actual output range
+        # sRN LMPoutputRange
+        self.send('sRN LMPoutputRange')
+        answer = self.read()  # sRA LMPoutputRange 1 1388 FFF92230 225510
+        data = answer.split()
+        range = edict()
+        range.dist_angle_res = int(data[3], 16)  # Uint_16
+        range.dist_start_ang = int32(data[4])  # Int_32
+        range.dist_stop_ang = int32(data[5])  # Int_32
+        return range
 
     def scan(self, raw=False):    # Get LIDAR Data
         self.send('sRN LMDscandata')
